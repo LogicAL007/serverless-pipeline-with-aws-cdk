@@ -43,14 +43,14 @@ class LambdaPipelineStack(Stack):
         pandasLayer = _lambda.LayerVersion(
             self,
             "pandasLayer",
-            code = _lambda.AssetCode("layers/pandasLayer"),
+            code = _lambda.AssetCode("layers/pandaslayer"),
          )
 
         # Create a layer with the alpha_vantage package
         alphaVantageLayer = _lambda.LayerVersion(
             self,
             "alphaVantageLayer",
-            code = _lambda.AssetCode("layers/alphaVantageLayer"),
+            code = _lambda.AssetCode("layers/alphavantage"),
          )
 
         # Create lambda to perform ETL on historical data
