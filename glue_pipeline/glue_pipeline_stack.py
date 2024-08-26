@@ -29,8 +29,8 @@ RDS_SECURITY_GROUP_IDS = [
 ]
 
 TAGS = [
-    CfnTag(key="ProjectOwner",value="Alex-Clark"),
-    CfnTag(key="ProjectName",value="Big-Data-Pipeline")
+    CfnTag(key="ProjectOwner",value="Omotosho-Ayomide"),
+    CfnTag(key="ProjectName",value="Serverless-Data-Pipeline")
 ]
 
 class GluePipelineStack(Stack):
@@ -51,10 +51,6 @@ class GluePipelineStack(Stack):
             prune=False
         )
 
-        #################################################################################
-        # Glue jobs require specific security configurations in order to run succesfully
-        # Including an s3 Gateway, Elastic ip, Nat Gateway and route table configurations
-        # https://aws.amazon.com/premiumsupport/knowledge-center/glue-s3-endpoint-validation-failed/
         rds_vpc = ec2.Vpc.from_lookup(self, "VPC",
             vpc_id = RDS_VPC_ID,
         )
@@ -79,7 +75,6 @@ class GluePipelineStack(Stack):
             nat_gateway_id=nat_gateway.attr_nat_gateway_id,
             destination_cidr_block="0.0.0.0/0",
         )"""
-        #################################################################################
 
         # We can now create the JDBC Configuration to Postgres/RDS
         rds_connection = glue.CfnConnection(self, "JDBCConnectionToRDS",
