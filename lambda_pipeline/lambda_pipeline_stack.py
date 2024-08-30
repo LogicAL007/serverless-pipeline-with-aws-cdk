@@ -12,7 +12,7 @@ from constructs import Construct
 from decouple import config
 
 BUCKET_NAME = config("BUCKET_NAME")
-LAMBDA_RUNTIME=_lambda.Runtime.PYTHON_3_7
+LAMBDA_RUNTIME = _lambda.Runtime.PYTHON_3_9  # Updated runtime to Python 3.9
 TICKERS = ["MSFT", "AMZN", "IBM"]
 
 CONVERSIONS = [
@@ -22,7 +22,7 @@ CONVERSIONS = [
     ("BTC", "USD")
 ]
 
-ENVIRONMENT={
+ENVIRONMENT = {
     "API_KEY": config("API_KEY"),
     "BUCKET_NAME": BUCKET_NAME
 }
@@ -43,15 +43,15 @@ class LambdaPipelineStack(Stack):
         pandasLayer = _lambda.LayerVersion(
             self,
             "pandasLayer",
-            code = _lambda.AssetCode("layers/pandaslayer"),
-         )
+            code=_lambda.AssetCode("layers/pandaslayer"),
+        )
 
         # Create a layer with the alpha_vantage package
         alphaVantageLayer = _lambda.LayerVersion(
             self,
-            "alphaVantageLayer",
-            code = _lambda.AssetCode("layers/alphavantage"),
-         )
+            "alphavantage",
+            code=_lambda.AssetCode("layers/alphavantage"),
+        )
 
         # Create lambda to perform ETL on historical data
         convert_historical_data_handler = _lambda.Function(self, "ConvertHistoricalDataHandler",
@@ -89,24 +89,20 @@ class LambdaPipelineStack(Stack):
             role=lambda_role,
         )
 
-        ########################################################################################
-        #Add Trigger to run historical lambda when new files are added
+        # Add Trigger to run historical lambda when new files are added
         bucket = s3.Bucket.from_bucket_name(self, "bucket", BUCKET_NAME)
         notification = s3n.LambdaDestination(convert_historical_data_handler)
         notification.bind(self, bucket)
 
         bucket.add_object_created_notification(
             notification,
-            s3.NotificationKeyFilter(prefix="data/forex_historical",suffix=".json.gz")
+            s3.NotificationKeyFilter(prefix="data/forex_historical", suffix=".json.gz")
         )
-        ########################################################################################
 
-
-        ########################################################################################
-        # Schedule the intrday handler for the tickers listed in the TICKERS list
+        # Schedule the intraday handler for the tickers listed in the TICKERS list
         for ticker in TICKERS:
             rule = events.Rule(self, f"CronRule-{ticker}",
-                schedule=events.Schedule.cron(hour="0",minute="0")
+                schedule=events.Schedule.cron(hour="0", minute="0")
             )
 
             target = targets.LambdaFunction(
@@ -115,11 +111,8 @@ class LambdaPipelineStack(Stack):
             )
 
             rule.add_target(target)
-        ########################################################################################
 
-
-        ########################################################################################
-        # Schedule the hourly forex data for the conversions in the CONVERSION list
+        # Schedule the hourly forex data for the conversions in the CONVERSIONS list
         for conversion in CONVERSIONS:
             rule = events.Rule(self, f"CronRuleForex-{conversion[0]}-{conversion[1]}",
                 schedule=events.Schedule.cron(hour="1,9-23", minute="5")
@@ -135,4 +128,3 @@ class LambdaPipelineStack(Stack):
                 )
             )
             rule.add_target(target)
-        ########################################################################################

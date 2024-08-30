@@ -11,8 +11,8 @@ from decouple import config
 BUCKET_NAME = config("BUCKET_NAME")
 DATABASE_NAME = config("DATABASE_NAME")
 TAGS = [
-    CfnTag(key="ProjectOwner",value="Alex-Clark"),
-    CfnTag(key="ProjectName",value="Big-Data-Pipeline")
+    CfnTag(key="ProjectOwner",value="Omotosho-Ayomide"),
+    CfnTag(key="ProjectName",value="Serverless-Data-Pipeline")
 ]
 
 class GlueDatabaseStack(Stack):

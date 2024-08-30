@@ -8,7 +8,7 @@ from glue_database.glue_database_stack import GlueDatabaseStack
 
 
 env_USA = cdk.Environment(account="011528285286", region="us-east-1")
-app = cdk.App()
+app = cdk.App() 
 
 glue_pipeline_stack = GluePipelineStack(app, "GluePipelineStack", env=env_USA)
 lambda_pipeline_stack = LambdaPipelineStack(app, "LambdaPipelineStack", env=env_USA)
