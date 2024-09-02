@@ -101,7 +101,7 @@ class GluePipelineStack(Stack):
             name="rds_extract_job",
             command=glue.CfnJob.JobCommandProperty(
                 name="glueetl",
-                python_version="3",
+                python_version="3.9",
                 script_location="s3://big-data-pipeline/scripts/RDSExtract.py"
             ),
             role=glue_role.role_arn,

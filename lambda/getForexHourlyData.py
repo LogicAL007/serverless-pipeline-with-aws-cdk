@@ -1,102 +1,75 @@
 import os
-from alpha_vantage.foreignexchange import ForeignExchange
-from helperFunctions import write_to_s3
-import json
+from datetime import datetime
+import pandas as pd
+import pyarrow as pa
+from helperFunctions import s3_gzip_to_json, write_parquet_table_to_s3
 
-API_KEY = os.environ["API_KEY"]
-LOCATION = "s3://big-data-pipeline/datalake/forex_hourly/"
+BUCKET = os.environ["BUCKET_NAME"]
+DEST_PREFIX = "datalake/forex_historical/"
 
-#Used for renaming coulmns
-MAPPER = {
-    "1. From_Currency Code": "from_currency_code",
-    "2. From_Currency Name": "from_currency_name",
-    "3. To_Currency Code": "to_currency_code",
-    "4. To_Currency Name": "to_currency_name",
-    "5. Exchange Rate": "exchange_rate",
-    "6. Last Refreshed": "last_refreshed",
-    "7. Time Zone": "time_zone",
-    "8. Bid Price": "bid_price",
-    "9. Ask Price": "ask_price",
-}
+# Schema definition for Parquet files to ensure compatibility with AWS Glue
+FILE_SCHEMA = pa.schema([
+    ("from_currency", pa.string()),
+    ("to_currency", pa.string()),
+    ("date", pa.date64()),
+    ("open", pa.float64()),
+    ("high", pa.float64()),
+    ("low", pa.float64()),
+    ("close", pa.float64()),
+    ("adj_close", pa.float64()),
+    ("volume", pa.float64())
+])
 
-FLOAT_KEYS = [
-    "exchange_rate",
-    "time_zone",
-    "bid_price",
-    "ask_price"
-]
-
-DATE_KEYS = ["last_refreshed"]
-
-# Renames the keys in the dictionary based on the mapper
-def rename_keys(data: dict, mapper: dict) -> dict:
-    new_data = {}
-    for old_key, new_key in mapper.items():
-        new_data[new_key] = data.get(old_key)
-    return new_data
-
-# Converts specified keys to floats
-def convert_float_dtypes(data: dict, keys: list) -> None:
-    for key in keys:
-        try:
-            data[key] = float(data[key])
-        except:
-            data[key] = 0.0
-
-# Creates a filename using output from alpha vantage request
-def create_filename(data: dict, location: str) -> str:
-    f_curr = data["from_currency_code"]
-    t_curr = data["to_currency_code"]
-    f_dt = data["last_refreshed"][:10]
-    hour = data["last_refreshed"][11:13]
-    return location + f"date={f_dt}/{f_curr}_{t_curr}_{hour}.json"
-
-# Retrieves time series data from Alpha Vantage API and returns a pandas DataFrame
-def get_currency_conversion(from_currency, to_currency) -> dict:
-    cc = ForeignExchange(key=API_KEY)
-    data, _ = cc.get_currency_exchange_rate(from_currency, to_currency)
-    data = rename_keys(data, MAPPER)
-    convert_float_dtypes(data, FLOAT_KEYS)
-    return data
-
-# Writes data in DataFrame to S3
-def write_data(data, location) -> None:
-    try:
-        filename = create_filename(data, location)
-        write_to_s3(json.dumps(data), filename)
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "text/plain"
-            },
-            "body": "Request Completed"
+def convert_gzip_json_to_dataframe(file_path: str) -> pd.DataFrame:
+    """Convert gzipped JSON data from S3 to a DataFrame."""
+    data = s3_gzip_to_json(filename=file_path)
+    rows = [
+        {
+            "from_currency": currency_pair.split("_")[0],
+            "to_currency": currency_pair.split("_")[1],
+            "date": datetime.strptime(date, "%Y-%m-%d"),
+            **values
         }
-    except:
+        for currency_pair, dates in data.items()
+        for date, values in dates.items()
+    ]
+    return pd.DataFrame(rows)
+
+def process_file(event: dict):
+    """Process a file based on Lambda event trigger."""
+    file_source = file_dest = ""
+    if "Records" in event:
+        record = event["Records"][0]
+        bucket = record["s3"]["bucket"]["name"]
+        key = record["s3"]["object"]["key"]
+        file_source = f"s3://{bucket}/{key}"
+        file_name = key.split("/")[-1].replace(".json.gz", ".parquet")
+        file_dest = f"s3://{bucket}/{DEST_PREFIX}{file_name}"
+    elif "FileSource" in event and "FileDest" in event:
+        file_source = event["FileSource"]
+        file_dest = event["FileDest"]
+
+    if not file_source or not file_dest:
         return {
-                "StatusCode": 400,
-                "headers": {
-                    "Content-Type": "text/plain"
-            },
-            "body": "Unable to write to S3"
+            "statusCode": 400,
+            "body": "Missing file source or destination in event."
         }
 
-"""
-sample_event = {
-    "from_currency": "BTC",
-    "to_currency": "USD"
-}
-"""
-def handler(event, context):
-    from_currency = event.get("from_currency")
-    to_currency = event.get("to_currency")
-    if not from_currency and to_currency:
-        return {
-                "StatusCode": 400,
-                "headers": {
-                    "Content-Type": "text/plain"
-            },
-            "body": "Request must include from_currency and to_currency"
-        }
-    data = get_currency_conversion(from_currency, to_currency)
-    status = write_data(data, LOCATION)
-    return status
+    df = convert_gzip_json_to_dataframe(file_source)
+    table = pa.Table.from_pandas(df, schema=FILE_SCHEMA)
+    write_parquet_table_to_s3(table, filename=file_dest)
+    return {
+        "statusCode": 200,
+        "body": "Data successfully processed and saved."
+    }
+
+def lambda_handler(event, context):
+    """Lambda function to handle S3 event for processing JSON to Parquet."""
+    response = process_file(event)
+    return {
+        "statusCode": response.get("statusCode", 500),
+        "headers": {
+            "Content-Type": "text/plain"
+        },
+        "body": response.get("body", "An unexpected error occurred.")
+    }
