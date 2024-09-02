@@ -8,8 +8,8 @@ from helperFunctions import write_parquet_table_to_s3
 API_KEY = os.environ["API_KEY"]
 LOCATION = "s3://big-data-pipeline/datalake/stock_data_intraday/"
 
-#Used for renaming coulmns
-MAPPER = {
+# Column names mapping
+COLUMN_MAPPER = {
     "date": "datetime",
     "1. open": "open",
     "2. high": "high",
@@ -28,7 +28,7 @@ COLUMN_ORDER = [
     "volume"
 ]
 
-# Parquet file schema
+# Schema for the Parquet file
 FILE_SCHEMA = pa.schema([
     ("datetime", pa.timestamp("s")),
     ("ticker", pa.string()),
@@ -39,77 +39,55 @@ FILE_SCHEMA = pa.schema([
     ("volume", pa.float64())
 ])
 
-# Retrieves time series data from Alpha Vantage API and returns a pandas DataFrame
-def get_data(ticker) -> pd.DataFrame:
-    ts = TimeSeries(key=API_KEY,output_format="pandas")
-    df, meta_data = ts.get_intraday(symbol=ticker,interval="15min", outputsize="full")
-    df.reset_index(inplace = True)
-    df["ticker"] = ticker
-    df.rename(MAPPER, inplace = True, axis = 1)
-    return df[COLUMN_ORDER]
+def get_stock_data(ticker: str) -> pd.DataFrame:
+    """Fetches intraday stock data from Alpha Vantage API."""
+    ts = TimeSeries(key=API_KEY, output_format="pandas")
+    data, _ = ts.get_intraday(symbol=ticker, interval="15min", outputsize="full")
+    data.reset_index(inplace=True)
+    data["ticker"] = ticker
+    data.rename(columns=COLUMN_MAPPER, inplace=True)
+    return data[COLUMN_ORDER]
 
-# Writes data in DataFrame to S3
-def write_data(df, dates) -> None:
-    date_filter = []
+def write_daily_data(df: pd.DataFrame, specific_dates: list) -> None:
+    """Writes daily stock data to S3 in Parquet format."""
     ticker = df["ticker"].unique()[0]
-    # Date filter includes all dates returned if the dates object is empty
-    if len(dates) == 0:
-        date_filter += list(df["datetime"].dt.date.unique())
-    else:
-        date_filter += dates
-    # Write a file for each date in the date filter
-    for date in date_filter:
-        date_string = date.strftime("%Y-%m-%d")
-        location = f"{LOCATION}date={date_string}/{ticker}.parquet"
-        filtered_df = df[df["datetime"].dt.date == date]
-        table = pa.Table.from_pandas(filtered_df, FILE_SCHEMA)
-        write_parquet_table_to_s3(table, filename=location)
+    dates_to_process = specific_dates or df["datetime"].dt.date.unique()
 
-"""
-sample_event = {
-    "ticker": "MSFT",
-    "backfill": true|false
-    "dates": ["2022-11-08"]
-}
-"""
-def handler(event, context):
-    dates = []
-    # If the the invocation includes a date filter and not a backfill flag
-    # create a list of dates from the list of date strings
-    if event.get("dates") and not event.get("backfill"):
-        try:
-            dates = [datetime.strptime(x,"%Y-%m-%d") for x in event.get("dates")]
-        except Exception as e:
-            return {
-                "StatusCode": 400,
-                "headers": {
-                    "Content-Type": "text/plain"
-            },
+    for single_date in dates_to_process:
+        date_str = single_date.strftime("%Y-%m-%d")
+        file_location = f"{LOCATION}date={date_str}/{ticker}.parquet"
+        day_data = df[df["datetime"].dt.date == single_date]
+        table = pa.Table.from_pandas(day_data, schema=FILE_SCHEMA)
+        write_parquet_table_to_s3(table, uri=file_location)
+
+def lambda_handler(event, context):
+    """Handles Lambda event for processing stock data."""
+    try:
+        dates = [datetime.strptime(d, "%Y-%m-%d") for d in event.get("dates", [])]
+    except ValueError:
+        return {
+            "statusCode": 400,
+            "headers": {"Content-Type": "text/plain"},
             "body": "Invalid Dates! Dates must be in format 'YYYY-MM-DD'"
         }
-    # If there is no backfill flag and and no date filter, 
-    # the handler will be run for yesterday
-    if not event.get("backfill") and not event.get("dates"):
-        dates.append(date.today() - timedelta(days=1))
-    if not event.get("ticker"):
+
+    ticker = event.get("ticker")
+    if not ticker:
         return {
-            "StatusCode": 400,
-            "headers": {
-                "Content-Type": "text/plain"
-        },
-        "body": "Request Failed! No ticker included in request"
-    }
-    # Although this isn"t necessary it provides ease of readability
-    # If there is a backfill flag, the date filter is left empty which will 
-    # backfill the the data for the given ticker
-    if event.get("backfill"):
-        dates = []
-    df = get_data(event.get("ticker"))
-    write_data(df, dates)
+            "statusCode": 400,
+            "headers": {"Content-Type": "text/plain"},
+            "body": "Request Failed! No ticker included in request"
+        }
+
+    # Determine dates to process
+    if not event.get("backfill"):
+        dates = dates or [date.today() - timedelta(days=1)]
+
+    data = get_stock_data(ticker)
+    write_daily_data(data, dates)
+
     return {
         "statusCode": 200,
-        "headers": {
-            "Content-Type": "text/plain"
-        },
+        "headers": {"Content-Type": "text/plain"},
         "body": "Request Completed"
     }

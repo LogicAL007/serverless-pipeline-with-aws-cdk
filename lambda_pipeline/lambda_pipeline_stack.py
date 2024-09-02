@@ -1,130 +1,106 @@
 from aws_cdk import (
     Stack,
-    aws_lambda as _lambda,
+    aws_lambda as lambda_,
     aws_iam as iam,
     Duration,
     aws_s3 as s3,
     aws_s3_notifications as s3n,
     aws_events as events,
-    aws_events_targets as targets,
+    aws_events_targets as targets
 )
 from constructs import Construct
 from decouple import config
 
-BUCKET_NAME = config("BUCKET_NAME")
-LAMBDA_RUNTIME = _lambda.Runtime.PYTHON_3_9  # Updated runtime to Python 3.9
-TICKERS = ["MSFT", "AMZN", "IBM"]
-
-CONVERSIONS = [
-    ("BTC", "CNY"),
-    ("USD", "JPY"),
-    ("USD", "CNY"),
-    ("BTC", "USD")
-]
-
-ENVIRONMENT = {
-    "API_KEY": config("API_KEY"),
-    "BUCKET_NAME": BUCKET_NAME
-}
-
 class LambdaPipelineStack(Stack):
-
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
 
-        lambda_role = iam.Role(self, "LambdaRole",
-            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com")
+        # Environment settings
+        bucket_name = config("BUCKET_NAME")
+        api_key = config("API_KEY")
+        environment = {"API_KEY": api_key, "BUCKET_NAME": bucket_name}
+        
+        # Define IAM role for Lambda functions
+        lambda_role = self.create_lambda_role()
+
+        # Define Lambda layers
+        pandas_layer = self.create_lambda_layer("PandasLayer", "layers/pandaslayer")
+        alpha_vantage_layer = self.create_lambda_layer("AlphaVantageLayer", "layers/alphavantage")
+
+        # Define Lambda functions
+        convert_historical_data_handler = self.create_lambda_function(
+            "ConvertHistoricalDataHandler",
+            "convertHistoricalData.handler",
+            [pandas_layer],
+            environment,
+            lambda_role
+        )
+        intraday_data_handler = self.create_lambda_function(
+            "IntradayDataHandler",
+            "getIntradayStockData.handler",
+            [pandas_layer, alpha_vantage_layer],
+            environment,
+            lambda_role
+        )
+        forex_data_handler = self.create_lambda_function(
+            "ForexDataHandler",
+            "getForexHourlyData.handler",
+            [alpha_vantage_layer],
+            environment,
+            lambda_role
         )
 
-        lambda_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess"))
-        lambda_role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
+        # S3 bucket configuration and trigger setup
+        self.configure_s3_bucket(bucket_name, convert_historical_data_handler)
 
-        # Create a layer with the pandas package
-        pandasLayer = _lambda.LayerVersion(
-            self,
-            "pandasLayer",
-            code=_lambda.AssetCode("layers/pandaslayer"),
+        # Schedule Lambdas for ticker updates
+        self.schedule_lambdas(intraday_data_handler, forex_data_handler)
+
+    def create_lambda_role(self):
+        role = iam.Role(self, "LambdaRole", assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"))
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess"))
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
+        return role
+
+    def create_lambda_layer(self, id, asset_path):
+        return lambda_.LayerVersion(self, id, code=lambda_.AssetCode(asset_path))
+
+    def create_lambda_function(self, id, handler, layers, environment, role):
+        return lambda_.Function(
+            self, id,
+            function_name=id,
+            runtime=lambda_.Runtime.PYTHON_3_9,
+            code=lambda_.Code.from_asset("lambda"),
+            handler=handler,
+            timeout=Duration.seconds(60),  # Default timeout for all functions
+            layers=layers,
+            environment=environment,
+            role=role
         )
 
-        # Create a layer with the alpha_vantage package
-        alphaVantageLayer = _lambda.LayerVersion(
-            self,
-            "alphavantage",
-            code=_lambda.AssetCode("layers/alphavantage"),
-        )
-
-        # Create lambda to perform ETL on historical data
-        convert_historical_data_handler = _lambda.Function(self, "ConvertHistoricalDataHandler",
-            function_name="historical_data_handler",
-            runtime=LAMBDA_RUNTIME,
-            code=_lambda.Code.from_asset("lambda"),
-            timeout=Duration.seconds(30),
-            layers=[pandasLayer],
-            handler="convertHistoricalData.handler",
-            environment=ENVIRONMENT,
-            role=lambda_role,
-        )
-
-        # Create lambda to perform ETL on intraday stock data
-        intraday_data_handler = _lambda.Function(self, "IntradayDataHandler",
-            function_name="intraday_data_handler",
-            runtime=LAMBDA_RUNTIME,
-            code=_lambda.Code.from_asset("lambda"),
-            timeout=Duration.seconds(60),
-            layers=[pandasLayer, alphaVantageLayer],
-            handler="getIntradayStockData.handler",
-            environment=ENVIRONMENT,
-            role=lambda_role,
-        )
-
-        # Lambda to retrieve hourly forex data
-        forex_data_handler = _lambda.Function(self, "ForexDataHandler",
-            function_name="hourly_forex_handler",
-            runtime=LAMBDA_RUNTIME,
-            code=_lambda.Code.from_asset("lambda"),
-            timeout=Duration.seconds(30),
-            layers=[alphaVantageLayer],
-            handler="getForexHourlyData.handler",
-            environment=ENVIRONMENT,
-            role=lambda_role,
-        )
-
-        # Add Trigger to run historical lambda when new files are added
-        bucket = s3.Bucket.from_bucket_name(self, "bucket", BUCKET_NAME)
-        notification = s3n.LambdaDestination(convert_historical_data_handler)
+    def configure_s3_bucket(self, bucket_name, data_handler):
+        bucket = s3.Bucket.from_bucket_name(self, "Bucket", bucket_name)
+        notification = s3n.LambdaDestination(data_handler)
         notification.bind(self, bucket)
-
         bucket.add_object_created_notification(
-            notification,
-            s3.NotificationKeyFilter(prefix="data/forex_historical", suffix=".json.gz")
+            notification, s3.NotificationKeyFilter(prefix="data/forex_historical", suffix=".json.gz")
         )
 
-        # Schedule the intraday handler for the tickers listed in the TICKERS list
-        for ticker in TICKERS:
+    def schedule_lambdas(self, intraday_data_handler, forex_data_handler):
+        tickers = ["MSFT", "AMZN", "IBM"]
+        conversions = [
+            ("BTC", "CNY"), ("USD", "JPY"), ("USD", "CNY"), ("BTC", "USD")
+        ]
+
+        # Schedule stock data updates
+        for ticker in tickers:
             rule = events.Rule(self, f"CronRule-{ticker}",
-                schedule=events.Schedule.cron(hour="0", minute="0")
-            )
+                               schedule=events.Schedule.cron(hour="0", minute="0"))
+            rule.add_target(targets.LambdaFunction(intraday_data_handler, event=events.RuleTargetInput.from_object({"ticker": ticker})))
 
-            target = targets.LambdaFunction(
-                intraday_data_handler,
-                event=events.RuleTargetInput.from_object({"ticker": ticker})
-            )
+        # Schedule forex data updates
+        for from_currency, to_currency in conversions:
+            rule = events.Rule(self, f"CronRuleForex-{from_currency}-{to_currency}",
+                               schedule=events.Schedule.cron(hour="1,9-23", minute="5"))
+            rule.add_target(targets.LambdaFunction(forex_data_handler, event=events.RuleTargetInput.from_object({"from_currency": from_currency, "to_currency": to_currency})))
 
-            rule.add_target(target)
-
-        # Schedule the hourly forex data for the conversions in the CONVERSIONS list
-        for conversion in CONVERSIONS:
-            rule = events.Rule(self, f"CronRuleForex-{conversion[0]}-{conversion[1]}",
-                schedule=events.Schedule.cron(hour="1,9-23", minute="5")
-            )
-
-            target = targets.LambdaFunction(
-                forex_data_handler,
-                event=events.RuleTargetInput.from_object(
-                    {
-                        "from_currency": conversion[0],
-                        "to_currency": conversion[1]
-                    }
-                )
-            )
-            rule.add_target(target)
