@@ -93,8 +93,9 @@ The data pipeline consists of several components, as shown in the diagram below:
 
    - Check the AWS Management Console to ensure all resources are created correctly.
    - Verify that the Lambda functions are using the correct Python runtime (e.g., `python3.9`).
-
-
+![alt text](<Screenshot 2024-09-07 145527.png>)
+![alt text](<Screenshot 2024-09-07 145527-1.png>)
+![alt text](<Screenshot 2024-09-07 145959.png>)
 ## Usage
 
 1. **Monitor Logs**
