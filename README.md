@@ -101,7 +101,7 @@ The data pipeline consists of several components, as shown in the diagram below:
 ## Troubleshooting
 
 - **Error: The runtime parameter of python3.7 is no longer supported**
-  - Ensure all Lambda functions are using a supported runtime (`python3.9` or later). Search the project files for any references to `python3.7` and update them.
+  - Ensure all Lambda functions are using a supported runtime (`python3.9` or later). Search the project files for any references to `python3.8` and update them.
 
 - **Stack Deployment Fails**
   - If the deployment fails, check the AWS CloudFormation console for detailed error messages. Delete the failed stack and try redeploying.
