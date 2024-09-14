@@ -96,23 +96,7 @@ The data pipeline consists of several components, as shown in the diagram below:
 ![alt text](<Screenshot 2024-09-07 145527.png>)
 ![alt text](<Screenshot 2024-09-07 145527-1.png>)
 ![alt text](<Screenshot 2024-09-07 145959.png>)
-## Usage
-
-1. **Monitor Logs**
-
-   Use CloudWatch Logs to monitor the execution of Lambda functions:
-
-   ```bash
-   aws logs tail /aws/lambda/<function-name>
-   ```
-
-2. **Trigger Functions Manually**
-
-   You can invoke Lambda functions manually for testing:
-
-   ```bash
-   aws lambda invoke --function-name <function-name> out.txt
-   ```
+4. **Run the `backfill.py` script**
 
 ## Troubleshooting
 
